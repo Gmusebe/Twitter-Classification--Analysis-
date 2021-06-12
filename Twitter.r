@@ -47,26 +47,78 @@ hashtags <- c('#rape', '#murder', '#killing', '#violence', '#robbery',
 needle <- paste(hashtags, collapse = " OR ")
 
 security_info <- search_tweets(needle,
-                               n = 18000,
+                               n = 50000,
                                include_rts = FALSE,
-                               geocode = lookup_coords("usa"))
+                               geocode = lookup_coords("usa"),
+                               retryonratelimit = TRUE)
+
+# Unique users
+length(unique(security_info$user_id))
+# [1] 21684
+
+# Create a word cloud
+library(wordcloud)
+library(RColorBrewer)
+
+#plot occurrences of each keyword in hashtags
+hashtags <-data.frame(table(unlist(security_info$hashtags)))
+
+#remove hashtags that appear less than 4 times
+hashtags <- hashtags[which(hashtags$Freq > 4),] 
+
+#remove obvious and unrelated hashtags
+related_hashtags <- c("abuse", "AlQaeda", "arrests", "assault", "bomb", "cannabis", "ChildSexTrafficking", 
+                      "CIA", "CivilWar", "ClimateCrisis", "coldwar", "ColdWar", "corruption", "crime", "Crime",
+                      "CrimesAgainstHumanity", "CrimeStoppers", "criminal", "Criminal", "CRIMINAL",
+                      "criminaljustice", "CriminalJustice", "CultureWar", "cyberattacks", "cybercrime", "CyberCrime",
+                      "cybersecurity", "CyberSecurity", "cyberthreats", "danger", "Death", "death", "dead","DrugCartel", "drugs",
+                      "Embezzlement", "EndProxyWar", "EndSARS", "FBI", "Federal", "federal", "Fire", "FIRE", "fire",
+                      "FRAUD", "guns", "hatecrime", "HumanTrafficking", "insurancefraud", "ISIS", "justice",
+                      "Justice", "killed", "murder", "Murder", "PoliceBrutality", "protest", "Protest", "protests", "Protests",
+                      "racism", "racist", "Rape", "rape", "robbery", "SerialKiller", 	
+                      "serialKiller", "serialKillers", "shooting", "Shooting", "terrorism", "Terrorism", "terrorist",
+                      "Terrorist")
 
 
-# To export the tweets into a csv for gathering of data for a standard subscription:
-write_as_csv(security_info, "security_info.csv")
+hashtags = hashtags[which(hashtags$Var1 %in% related_hashtags),]
+
+# Decapitalize all characters to lower:
+hashtags <- hashtags %>% 
+  mutate(Var1 = tolower(Var1)) %>% ddply("Var1", numcolwise(sum))
+
+# The WordCloud
+wordcloud(word = hashtags$Var1, freq = hashtags$Freq, max.words=200, random.order=FALSE, rot.per=0.35, colors=brewer.pal(8, "Dark2"))
+
+
+#Geographical Analysis of Tweets
+# table of the 10 red zone areas:
+security_info %>% 
+  filter(is.na(place_full_name) == FALSE & place_full_name != "") %>% 
+  dplyr::count(place_full_name, sort = TRUE) %>% 
+  slice(1:10)
+
+# Visualize:
+security_info %>%
+  dplyr::count(place_full_name, sort = TRUE) %>%
+  mutate(location = reorder(place_full_name,n)) %>%
+  na.omit() %>%
+  top_n(10) %>%
+  ggplot(aes(x = location,y = n)) +
+  geom_col() +
+  coord_flip() +
+  labs(x = "Place",
+       y = "Count",
+       title = "Security Incidents -Locations ")
+
 
 # Extracting Tweet Geographic Coordinates
-#The third source for geographic information is the geotagged precise location point 
-# coordinates of where the tweet was tweeted.
-# To extract the longitudes and latitudes of the tweet locations use the function lat_lng().
-## create lat/lng variables using all available tweet and profile geo-location data
-# The function creates two new columns in the data set, lat and lng, which represent the latitude and longitude coordinates, respectively.
-# Not all tweets are geotagged. Let’s keep the tweets with lat/long info using the filter() command.
+security_info <- lat_lng(security_info)
 
 security_info_geo <- lat_lng(security_info) %>%
-  filter(is.na(lat) == FALSE & is.na(lng) == FALSE)
+    filter(is.na(lat) == FALSE & is.na(lng) == FALSE)
 
 
+# Mapping Tweets
 security_info_geo.sf <- st_as_sf(security_info_geo , coords = c("lng", "lat"), crs = "+proj=longlat +datum=WGS84 +ellps=WGS84")
 
 leaflet() %>%
@@ -75,24 +127,4 @@ leaflet() %>%
              color = "blue")
 
 
-
-## plot state boundaries
-par(mar = c(0, 0, 0, 0))
-maps::map("state", lwd = .25)
-
-## plot lat and lng points onto state map
-with(security_info, points(lng, lat, pch = 20, cex = .75, col = rgb(0, .3, .7, .75)))
-
-# For locations
-
-user_info <- lookup_users(unique(security_info$user_id))
-
-discard(user_info$location, `==`, "") %>% 
-  ggmap::geocode() -> coded
-
-coded$location <- discard(user_info$location, `==`, "")
-
-user_info <- left_join(user_info, coded, "location")
-
-
-st_crs(la.metro) == st_crs(security_info_geo.sf)
+# End
