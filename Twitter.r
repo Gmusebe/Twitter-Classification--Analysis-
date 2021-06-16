@@ -25,14 +25,14 @@ library(sf)
 
 # Link Twitter Application and R.
 # Store Keys and Tokens into variables:
-API_Key <- "9JDmpjYlbTDelVDjAvC83eJBH"
-API_Secret_Key <- "INN7ZWx5hFWVggLmNekXPNVhR9iNXnwhzGZvOwyAJG3Fr4rTsI"
-Bearer_Token <- "AAAAAAAAAAAAAAAAAAAAAKnqQQEAAAAANvWhE74DwzQqTyusbSzvbZ1h60o%3DBbYAHh30S6GuUzoRs2GU6vJvwCwnKVmBWQUswgIk6cKTkEOE19"
-Access_Token <- "1263742897154818049-dGT6nKdbX8XPCTtRcBIsDVOuKsrcJb"
-Access_Token_Secret <-"Vko3wJIuEicPYv552eA7ocomjcxavlsxEiNj0YhMQejVx"
+API_Key <- "xxx"
+API_Secret_Key <- "xxxx"
+Bearer_Token <- "xxxx"
+Access_Token <- "xxxx"
+Access_Token_Secret <-"xxxx"
 
 # Set Google API Key:
-register_google(key = "AIzaSyDLgK2Ld_sClr5PZgBxJYhlfq_4nXCaVzc")
+register_google(key = "xxxx")
 
 
 # Setup Authentication
@@ -52,6 +52,7 @@ security_info <- search_tweets(needle,
                                include_rts = FALSE,
                                geocode = lookup_coords("usa"),
                                retryonratelimit = TRUE)
+
 
 # Unique users
 length(unique(security_info$user_id))
@@ -129,7 +130,7 @@ leaflet() %>%
 
 # Top 10 locations where security incidents were reported:
 security_info %>%
-  count(location, sort = TRUE) %>%
+  dplyr::count(location, sort = TRUE) %>%
   mutate(location = reorder(location,n)) %>%
   na.omit() %>%
   top_n(10) %>%
@@ -272,5 +273,110 @@ ggplot(table_tweet, aes(x=Var1, y=Freq)) +
   geom_point( size=5, color="red", fill=alpha("orange", 0.3), alpha=0.7, shape=21, stroke=2)
 
 
+# Classification Model:
+library(tm)
+library(RTextTools)
+
+# Attach the sentiment scores to the original data:
+security_info$sent_score = tweet_sentiment$ave_sentiment
+
+# Define a new variable called Negative.
+security_info$Negative <- as.factor(security_info$sent_score <= -1)
+
+# Factor Count:
+table(security_info$Negative)
+
+# Positive column:
+security_info$Positive = as.factor(security_info$sent_score >= 1)
+
+# Create a corpus from tweets:
+security_tweets <- security_info$text
+corp <- Corpus(VectorSource(security_tweets))
+
+# Custom functions
+twitterHandleRemover <- function(x) gsub("@\\S+","", x)
+hashtagRemover <- function(x) gsub("#\\S+","", x)
+emojiRemover <- function(x) gsub("[^\x01-\x74F]","",x)
+toSpace = content_transformer(function(x,pattern)gsub(pattern,"",x))
+
+cleaner <- function(corp){
+  corp <- tm_map(corp, toSpace," ?(f|ht)tp(s?)://(.*)[.][a-z]+")
+  corp <- tm_map(corp, content_transformer(twitterHandleRemover))
+  corp <- tm_map(corp, content_transformer(hashtagRemover))
+  corp <- tm_map(corp, removePunctuation)
+  corp <- tm_map(corp, emojiRemover)
+  corp <- tm_map(corp, stemDocument)
+  corp <- tm_map(corp, content_transformer(tolower))
+  return(corp)
+}
+
+corp <- cleaner(corp)
+
+# Stemming:
+corp <- tm_map(corp, stemDocument)
+
+# Craete DTM
+dtm = DocumentTermMatrix(corp)
+
+# Inspect dtm:
+inspect(dtm[1000:1005, 505:515])
+
+# Remove sparse terms:
+sparse_dtm <- removeSparseTerms(dtm, 0.995)
+
+# Convert the dtm to a data frame
+dtm_df <- as.data.frame(as.matrix(sparse_dtm))
+
+
+# Add the dependent variables:
+dtm_df$Negative <- security_info$Negative 
+dtm_df$Positive <- security_info$Positive
+
+# Manual classification for training set:
+
+library(caTools)
+library(rpart)
+library(rpart.plot)
+set.seed(16102016)
+
+#split data into training and testing data:
+negative_split <- sample.split(dtm_df$Negative, SplitRatio = 0.7)
+
+negative_train <- subset(dtm_df, negative_split == TRUE)
+negative_test <- subset(dtm_df, negative_split == FALSE)
+
+
+positive_split <- sample.split(dtm_df$Negative, SplitRatio = 0.7)
+
+positive_train <- subset(dtm_df, positive_split == TRUE)
+positive_test <- subset(dtm_df, positive_split == FALSE)
+
+
+# Negative Predictive Sentiment model:
+npm <- rpart(Negative ~ . , data = negative_train, method = "class")
+
+# Positive Predictive Sentiment model:
+ppm <- rpart(Positive ~ . , data = positive_train, method = "class")
+
+# Predictions
+# Negative:
+predict_negative <- predict(npm, newdata = negative_test, type = "class")
+
+# Negative Model Accuracy:
+# Confusion Matrix
+ng_cm <-  table(negative_test$Negative , predict_negative)
+ng_cm
+
+# Model Accuracy:
+negative_predictive_acc <- (ng_ac[1,1] + ng_ac[2,2])/sum(ng_ac)
+negative_predictive_acc
+
+# Positive:
+predict_positive <- predict(ppm, newdata = positive_test, type = "class")
+pg_cm <-  table(positive_test$Positive , predict_positive)
+
+# Model Accuracy:
+positive_predictive_acc <- (pg_ac[1,1] + pg_ac[2,2])/sum(pg_ac)
+positive_predictive_acc
 
 # End
